@@ -1,0 +1,53 @@
+{
+  "name": "imron-pms-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Imron Hotel PMS — Beds24 integratsiyasi",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/server.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "start": "node --env-file=.env dist/server.js",
+    "postinstall": "prisma generate",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:reset": "prisma migrate reset --force",
+    "db:studio": "prisma studio",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:css": "tailwindcss -c tools/tailwind.config.cjs -i tools/tailwind.css -o public/app/vendor/tailwind.css --minify",
+    "beds24:connect": "tsx --env-file=.env scripts/beds24-connect.ts",
+    "beds24:mock": "tsx --env-file=.env scripts/beds24-setup-mock.ts",
+    "beds24:verify": "tsx --env-file=.env scripts/beds24-verify.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.3.0",
+    "bcryptjs": "^3.0.3",
+    "bullmq": "^6.3.4",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.7.0",
+    "grammy": "^1.46.0",
+    "ioredis": "^6.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "ws": "^8.21.3",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.18.1",
+    "prisma": "^6.3.0",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

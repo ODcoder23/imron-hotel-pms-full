@@ -1,0 +1,21 @@
+# Zaxira nusxalar — git tarixining o'zi zaxira vazifasini bajaradi
+_backup/
+
+# Vaqtinchalik fayllar
+*.tmp
+*.bak
+.DS_Store
+
+# docker-compose maxfiy qiymatlari — hech qachon repoga tushmasin
+.env
+
+# Backend
+backend/node_modules/
+backend/dist/
+backend/.env
+backend/.pgdata/
+mock-beds24/node_modules/
+
+# Redis snapshot — ishlash paytida yaratiladi, repoda saqlanmaydi
+dump.rdb
+backend/dump.rdb

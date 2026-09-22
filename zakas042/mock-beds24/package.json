@@ -1,0 +1,22 @@
+{
+  "name": "mock-beds24",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Beds24 API v2 taqlidi — integratsiya testlari uchun",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch server.ts",
+    "start": "tsx server.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^5.0.0"
+  }
+}

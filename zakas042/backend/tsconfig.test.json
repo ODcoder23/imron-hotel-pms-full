@@ -1,0 +1,21 @@
+{
+  // Testlar uchun tip tekshiruvi.
+  //
+  // Asosiy `tsconfig.json` testlarni `exclude` qiladi — ular
+  // ishlab chiqarish tasviriga kirmasligi kerak (Dockerfile
+  // `npx tsc` ni ishlatadi). Lekin tiplari baribir tekshirilishi
+  // shart, aks holda testdagi xato faqat ishga tushirganda chiqadi.
+  //
+  // `rootDir` bekor qilinadi: `vitest.setup.ts` va `vitest.config.ts`
+  // `src/` dan tashqarida yotadi. Bu yerda fayl chiqarilmaydi
+  // (`noEmit`), shuning uchun `rootDir` ning ma'nosi yo'q.
+  //
+  // Ishlatish:  npm run typecheck
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["src/**/*", "vitest.setup.ts", "vitest.config.ts"],
+  "exclude": ["node_modules", "dist"]
+}

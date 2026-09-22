@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+*/node_modules/
+*/*/node_modules/
+
+# Environment files & secrets
+.env
+.env.*
+!.env.example
+*.env
+*.env.*
+!*.env.example
+
+# Build outputs
+dist/
+**/dist/
+build/
+**/build/
+
+# Backups & temporary files
+_backup/
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Database & Cache
+.pgdata/
+**/.pgdata/
+*.rdb
+dump.rdb
+**/dump.rdb
+
+# Logs & dev session tools
+logs/
+*.log
+.gstack/
+.git_backup/

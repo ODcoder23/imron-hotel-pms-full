@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beds24 ulanishi — Imron PMS</title>
+<link rel="stylesheet" href="_shared.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>Beds24 ulanishi</h1>
+  <div class="sub">
+    Ulanish holati va kredit hisobi. Token hech qachon ko'rsatilmaydi (TZ 13-band).
+  </div>
+
+  <nav>
+    <a href="/admin/mapping.html">Mapping</a>
+    <a href="/admin/connection.html" class="on">Ulanish</a>
+    <a href="/admin/sync-log.html">Sync loglari</a>
+  </nav>
+
+  <div id="msg" class="msg"></div>
+
+  <div class="card">
+    <div class="row">
+      <h2 style="margin:0">Holat</h2>
+      <div>
+        <button onclick="ping()">Tekshirish</button>
+        <button onclick="load()">Yangilash</button>
+      </div>
+    </div>
+    <div id="status" class="stats" style="margin-top:12px">
+      <div class="empty">Yuklanmoqda...</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Tizim holati</h2>
+    <table id="sys"><tbody><tr><td class="empty">Yuklanmoqda...</td></tr></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Ulanishni sozlash</h2>
+    <div class="sub" style="margin:0">
+      Ulanish CLI orqali sozlanadi — invite code brauzerga kiritilmaydi (TZ 18-band):
+      <br><br>
+      <code>npm run beds24:connect</code>
+      <br><br>
+      Invite code Beds24 panelida yaratiladi:
+      <strong>Settings &rarr; Account &rarr; Access &rarr; Generate invite code</strong>.
+      Scope: bookings (read+write), inventory (read+write), properties (read).
+      <br><br>
+      Keyin tekshirish: <code>npm run beds24:verify</code>
+    </div>
+  </div>
+</div>
+
+<script>
+function msg(t, isErr) {
+  const el = document.getElementById("msg");
+  el.textContent = t;
+  el.className = "msg show " + (isErr ? "err" : "ok");
+  if (!isErr) setTimeout(function () { el.className = "msg"; }, 3000);
+}
+
+async function api(p) {
+  const r = await fetch(p);
+  const b = await r.json();
+  if (!r.ok) throw new Error((b && b.error) || ("HTTP " + r.status));
+  return b;
+}
+
+async function load() {
+  try {
+    const [conn, status] = await Promise.all([
+      api("/api/admin/connection"),
+      api("/api/admin/status"),
+    ]);
+
+    const connBadge = conn.isConnected
+      ? '<span class="badge b-ok">Ulangan</span>'
+      : '<span class="badge b-mute">Ulanmagan</span>';
+
+    const creditClass = conn.credits.isLow ? "b-warn" : "b-ok";
+    const credits = '<span class="badge ' + creditClass + '">' + conn.credits.remaining + '</span>';
+
+    const expires = conn.tokenExpiresAt
+      ? new Date(conn.tokenExpiresAt).toLocaleString("uz")
+      : "—";
+
+    document.getElementById("status").innerHTML =
+      '<div class="stat"><div class="n">' + connBadge + '</div><div class="l">Ulanish</div></div>' +
+      '<div class="stat"><div class="n">' + (conn.propertyId || "—") + '</div><div class="l">Property ID</div></div>' +
+      '<div class="stat"><div class="n">' + credits + '</div><div class="l">Kredit qoldi</div></div>' +
+      '<div class="stat"><div class="n" style="font-size:13px">' + expires + '</div><div class="l">Token muddati</div></div>';
+
+    const m = status.mapping;
+    const mapBadge = m.isComplete
+      ? '<span class="badge b-ok">To\'liq</span>'
+      : '<span class="badge b-warn">' + m.unmappedRoomCount + ' xona bog\'lanmagan</span>';
+
+    const failed = status.counts.failedSyncs
+      ? '<span class="badge b-err">' + status.counts.failedSyncs + '</span>'
+      : "0";
+    const pending = status.counts.pendingWebhooks
+      ? '<span class="badge b-warn">' + status.counts.pendingWebhooks + '</span>'
+      : "0";
+
+    document.getElementById("sys").innerHTML = "<tbody>" +
+      "<tr><td>Mapping</td><td>" + mapBadge + "</td></tr>" +
+      "<tr><td>Xonalar</td><td>" + status.counts.rooms + "</td></tr>" +
+      "<tr><td>Faol bronlar</td><td>" + status.counts.activeReservations + "</td></tr>" +
+      "<tr><td>Muvaffaqiyatsiz sync</td><td>" + failed + "</td></tr>" +
+      "<tr><td>Kutayotgan webhook</td><td>" + pending + "</td></tr>" +
+      "</tbody>";
+  } catch (e) {
+    msg("Yuklab bo'lmadi: " + e.message, true);
+  }
+}
+
+async function ping() {
+  try {
+    const r = await fetch("/api/admin/connection/ping", { method: "POST" });
+    const b = await r.json();
+    msg(b.ok ? "Ulanish ishlaydi: " + b.detail : "Xato: " + b.detail, !b.ok);
+    await load();
+  } catch (e) {
+    msg(e.message, true);
+  }
+}
+
+load();
+</script>
+</body>
+</html>

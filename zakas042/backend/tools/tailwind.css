@@ -1,0 +1,4 @@
+/* Shaxmatka CSS manbasi — tools/tailwind.config.cjs izohiga qarang */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

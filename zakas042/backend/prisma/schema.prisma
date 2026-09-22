@@ -1,0 +1,777 @@
+// ============================================================
+//  Imron Hotel PMS × Beds24 — Prisma schema
+//
+//  Manba: TZ-ASL.md 13-band (jadvallar), 1-band (Beds24 maydonlari),
+//         9-band (duplicate), 14-band (to'lov)
+//  Izohlar va moslik jadvali: 02-DATABASE-SXEMA.md
+//
+//  DIQQAT: Prisma bu faylga exclusion constraint yoza olmaydi.
+//  Overbooking himoyasi raw SQL migratsiya orqali qo'shiladi —
+//  02-DATABASE-SXEMA.md §2 ga qarang. Usiz TZ 3-bandi bajarilmaydi.
+//
+//  Tekshirish:  npx prisma validate
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===================== KANAL / CHANNEL MANAGER (TZ 12, 13-band) =====================
+
+model Channel {
+  id          String   @id @default(cuid())
+  code        String   @unique   // "beds24", "bronevik", "mybooking", ...
+  name        String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  connections ChannelConnection[]
+  mappings    ChannelMapping[]
+  webhooks    WebhookEvent[]
+  syncLogs    SyncLog[]
+  reservations Reservation[]
+  syncStates  SyncState[]
+}
+
+// Har bir Channel uchun credentials — TZ 13, 18-band: frontendga chiqmaydi
+model ChannelConnection {
+  id                   String   @id @default(cuid())
+  channelId            String
+  channel              Channel  @relation(fields: [channelId], references: [id])
+  refreshToken         String   // AES-256 bilan shifrlangan holda saqlanadi
+  accessToken          String?  // qisqa umrli cache, shifrlangan
+  accessTokenExpiresAt DateTime?
+  propertyId           String   // Beds24 property id
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([channelId, propertyId])
+}
+
+// TZ 5-band: "Har bir mapping database'da saqlansin"
+// Ikki darajali: RoomType ↔ Beds24 roomId, va Room ↔ Beds24 unit
+model ChannelMapping {
+  id                 String   @id @default(cuid())
+  channelId          String
+  channel            Channel  @relation(fields: [channelId], references: [id])
+
+  // PMS tomoni — ikkisidan kamida bittasi to'ldiriladi
+  roomTypeId         String?
+  roomType           RoomType? @relation(fields: [roomTypeId], references: [id])
+  roomId             String?
+  room               Room?    @relation(fields: [roomId], references: [id])
+
+  // Tashqi kanal tomoni
+  externalRoomTypeId String   // Beds24 "roomId" — ularning atamasida room type
+  externalUnitId     String?  // Beds24 unit id — jismoniy xona darajasi (TZ 5-band "Room 202")
+
+  /**
+   * Bu tarif ovqat bilan keladimi (BOTLAR-REJA.md, 2026-09-17).
+   *
+   * NEGA KERAK: Beds24 ovqat haqida standart maydon bermaydi.
+   * Ular odatda "Standart nonushta bilan" va "Standart
+   * nonushtasiz" degan ALOHIDA tariflar yaratadi. Mapping
+   * paytida qaysi biri ovqatli ekanini biz belgilaymiz.
+   *
+   * Oshxona boti shu belgiga qarab porsiya sanaydi.
+   */
+  includesMeal       Boolean  @default(false)
+
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Bitta tashqi room type + unit juftligi faqat bitta PMS obyektiga bog'lanadi
+  @@unique([channelId, externalRoomTypeId, externalUnitId])
+  // Bitta PMS xonasi bitta kanalda faqat bir marta mapping qilinadi
+  @@unique([channelId, roomId])
+  @@index([channelId, roomTypeId])
+}
+
+// TZ 10-band: "eventni saqlash", "duplicate tekshirish"
+model WebhookEvent {
+  id            String   @id @default(cuid())
+  channelId     String
+  channel       Channel  @relation(fields: [channelId], references: [id])
+  eventType     String   // "reservation.created", "payment.updated", ...
+  externalId    String?  // Beds24 bookingId — duplicate kaliti
+  payloadHash   String   // rawPayload'ning SHA-256 hash'i — mazmun o'zgarganini aniqlash uchun
+  rawPayload    Json     // sanitizatsiyadan o'tgan (10-fayl)
+  status        WebhookStatus @default(RECEIVED)
+  attempts      Int      @default(0)
+  processedAt   DateTime?
+  errorMessage  String?
+  createdAt     DateTime @default(now())
+
+  // TZ 9-band duplicate himoyasi — 1-qatlam.
+  // DIQQAT: bu yerda createdAt BO'LMASLIGI shart. createdAt = now() har safar
+  // boshqacha bo'lgani uchun, u constraint ichida bo'lsa dedup umuman ishlamaydi.
+  @@unique([channelId, eventType, externalId, payloadHash])
+  @@index([channelId, externalId])
+  @@index([status, createdAt])
+}
+
+enum WebhookStatus {
+  RECEIVED
+  QUEUED
+  PROCESSED
+  FAILED
+  IGNORED_DUPLICATE
+  NEEDS_MANUAL_ACTION   // mapping topilmadi — 06-fayl §4
+}
+
+// TZ 16-band: channel, action, request, response, status, error, timestamp, reservation ID
+model SyncLog {
+  id            String   @id @default(cuid())
+  channelId     String
+  channel       Channel  @relation(fields: [channelId], references: [id])
+  action        String   // "push_availability" | "push_rates" | "push_reservation" | "pull_bookings" | ...
+  direction     SyncDirection
+  reservationId String?
+  roomId        String?
+  request       Json?    // sanitizeForLog() dan o'tgan
+  response      Json?    // sanitizeForLog() dan o'tgan
+  status        SyncStatus
+  attempt       Int      @default(1)
+  errorMessage  String?
+  durationMs    Int?
+  createdAt     DateTime @default(now())   // = TZ'dagi "timestamp"
+
+  @@index([channelId, status, createdAt])
+  @@index([reservationId])
+}
+
+enum SyncDirection {
+  PMS_TO_CHANNEL
+  CHANNEL_TO_PMS
+}
+
+enum SyncStatus {
+  SUCCESS
+  FAILED
+  RETRYING
+  SKIPPED    // masalan: source-of-truth boshqa tomonda (TZ 7-band)
+}
+
+// TZ 10-band: polling/sync fallback uchun "oxirgi muvaffaqiyatli sync" nuqtasi
+model SyncState {
+  id                String   @id @default(cuid())
+  channelId         String
+  channel           Channel  @relation(fields: [channelId], references: [id])
+  key               String   // "bookings_pull" | "rates_pull"
+  lastSuccessfulAt  DateTime?
+  lastCursor        String?
+  updatedAt         DateTime @updatedAt
+
+  @@unique([channelId, key])
+}
+
+// TZ 18-band: "audit log"
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String   // "mapping.updated" | "settings.changed" | "webhook.reprocessed" | ...
+  entityType String?
+  entityId   String?
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+}
+
+// TZ 7-band: "Qaysi tizim source-of-truth ekani konfiguratsiyada aniq belgilanadi"
+model Settings {
+  key        String   @id   // "SOURCE_OF_TRUTH_RATES" | "SOURCE_OF_TRUTH_AVAILABILITY" | ...
+  value      String
+  updatedAt  DateTime @updatedAt
+  updatedBy  String?
+}
+
+// ===================== FOYDALANUVCHI / RBAC (TZ 18-band) =====================
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  fullName     String
+  role         UserRole @default(STAFF)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  auditLogs    AuditLog[]
+  employee     Employee?
+  payments     Payment[]      // qabul qilgan to'lovlari (S13)
+  expenses     Expense[]      // kiritgan xarajatlari (S14)
+  cleaningTasks CleaningTask[]  // yuborgan tozalash topshiriqlari
+}
+
+enum UserRole {
+  FOUNDER   // egasi: hamma narsa + umumiy hisobot bo'limi
+  ADMIN     // to'liq huquq: Beds24 ulanishi, mapping, sozlamalar
+  MANAGER   // bron, narx — Beds24 sozlamalariga kirolmaydi
+  STAFF     // check-in/check-out, to'lov qabul qilish
+}
+
+/**
+ * Xodim — kadrlar hisobi.
+ *
+ * `User` dan FARQI: `User` — tizimga kiradigan hisob (login,
+ * parol, rol). `Employee` — mehmonxonada ishlaydigan odam.
+ * Farrosh va oshpaz tizimga kirmaydi, lekin ular ham xodim.
+ *
+ * Bog'liqlik ixtiyoriy: qabulxona xodimining ikkalasi ham bo'ladi,
+ * oshpazning faqat `Employee` yozuvi.
+ */
+model Employee {
+  id        String   @id @default(cuid())
+  fullName  String
+  position  String              // "Qabulxona xodimi", "Farrosh", "Oshpaz"
+  phone     String?
+  /**
+   * Pasport seriyasi va raqami — kadrlar hisobi uchun.
+   *
+   * Admin panel bu maydonni ko'rsatadi. Mehmonlar pasporti
+   * alohida masala (SAVOLLAR.md S9, hali hal qilinmagan).
+   */
+  passport  String?
+  /**
+   * Xodim rasmi — `data:` URL yoki tashqi havola.
+   *
+   * Admin panelda karta ustida ko'rinadi. Rasm yo'q bo'lsa
+   * standart odam belgisi chiziladi.
+   */
+  photoUrl  String?
+  /** Oylik maosh, so'mda. Hisobotda jami xarajat hisoblanadi. */
+  salary    Decimal? @db.Decimal(12, 2)
+  hiredAt   DateTime @db.Date
+  /** Ishdan bo'shagan sana. null = hali ishlaydi. */
+  firedAt   DateTime? @db.Date
+  isActive  Boolean  @default(true)
+  notes     String?
+
+  /** Tizimga kiradigan xodim bo'lsa — hisobiga bog'lanadi */
+  /**
+   * Telegram ID — farroshlar guruhida tugma bosganda kim ekanini
+   * aniqlash uchun (TOZALIK-BOT.md §5).
+   *
+   * NEGA KERAK: Telegram faqat `user_id` beradi, bizga esa qaysi
+   * xodim ekani kerak — hisobotda "Dilnoza 8 xona tozaladi"
+   * ko'rinishi uchun. Bog'lanmagan odam tugma bosa olmaydi.
+   *
+   * Xodim botga `/id` yozib o'z raqamini bilib oladi.
+   */
+  telegramId String? @unique
+
+  userId    String?  @unique
+  user      User?    @relation(fields: [userId], references: [id])
+  cleaningTasks CleaningTask[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([position])
+}
+
+// ===================== MEHMONXONA ASOSIY MODELLARI (TZ 13-band) =====================
+
+// Qavat — o'z ID'si bilan. Xona ID'si kabi, qavat ID'si ham barcha
+// tizimlarga (Shaxmatka, admin panel, sayt, Beds24 mapping) bir xil
+// qiymat bo'lib tarqaladi.
+//
+// Nega alohida jadval, `Int` emas: qavatni nomlash ("1-qavat",
+// "Mansarda"), butun qavatni bir amalda yopish (ta'mir) va qavat
+// bo'yicha hisobot olish kerak. `Int` bilan bularning hech biri
+// ishonchli bo'lmaydi.
+model Floor {
+  id        String  @id            // "F1", "F2" — barcha tizimlarda shu qiymat
+  number    Int     @unique        // 1, 2, 3 — tartiblash va ko'rsatish uchun
+  label     String                 // "1-qavat"
+  isActive  Boolean @default(true) // false = butun qavat inventardan chiqadi
+  sortOrder Int     @default(0)
+
+  rooms     Room[]
+}
+
+model RoomType {
+  id          String   @id            // "standard" | "double" | "deluxe" — Shaxmatka bilan bir xil kalit
+  label       String                  // "Standart" | "Ikki kishilik" | "Lyuks"
+  multiplier  Float    @default(1)    // Shaxmatkadagi ROOM_TYPES.multiplier bilan bir xil
+  maxAdults   Int      @default(2)    // Website qidiruvida filtr (13-fayl §2)
+  sortOrder   Int      @default(0)
+
+  // --- Sayt uchun (2026-09-17) -----------------------------
+  //
+  // Sayt bu maydonlarni allaqachon kutardi (`index.html`
+  // loadRooms: `t.description`, `t.image`), lekin model ularni
+  // bermasdi — natijada xonalar rasmsiz va tavsifsiz ko'rinardi.
+
+  /** Mehmonga ko'rinadigan tavsif */
+  description String?
+  /** Asosiy rasm — `data:` URL yoki havola */
+  imageUrl    String?
+  /** Qo'shimcha rasmlar (galereya) */
+  gallery     Json?
+  /** Qulayliklar: ["Konditsioner", "Wi-Fi", "Balkon"] */
+  amenities   Json?
+  /** Saytda ko'rsatilsinmi — vaqtincha yashirish uchun */
+  showOnSite  Boolean  @default(true)
+
+  rooms       Room[]
+  mappings    ChannelMapping[]
+  ratePlans   RatePlan[]
+}
+
+// Q2: Room.id — xona raqamining o'zi ("101"), cuid() EMAS.
+// Shaxmatka frontendi aynan shu shaklda ishlaydi, o'zgartirilmaydi.
+model Room {
+  id          String     @id          // "101", "102", "202" — xona raqami = ID
+  number      String     @unique      // id bilan bir xil qiymat, o'qishga qulaylik uchun
+
+  // Qavat raqami sifatida ham saqlanadi (`floor`), ID sifatida ham
+  // (`floorId`). Birinchisi Shaxmatka bilan moslik uchun — u
+  // `room.floor` ni son deb o'qiydi va o'zgartirilmaydi. Ikkinchisi
+  // barcha tizimlar uchun yagona identifikator.
+  floor       Int
+  floorId     String?
+  floorRef    Floor?     @relation(fields: [floorId], references: [id])
+
+  roomTypeId  String
+  roomType    RoomType   @relation(fields: [roomTypeId], references: [id])
+  status      RoomStatus @default(AVAILABLE)   // joriy jismoniy holat (sanaga bog'liq emas)
+  isActive    Boolean    @default(true)        // false = inventarda umuman hisoblanmaydi
+  sortOrder   Int        @default(0)
+
+  mappings     ChannelMapping[]
+  reservations Reservation[]
+  dayStatuses  RoomDayStatus[]
+  cleaningTasks CleaningTask[]
+
+  @@index([floorId])
+}
+
+// Shaxmatkadagi ROOM_STATUS bilan aynan bir xil qiymatlar
+enum RoomStatus {
+  AVAILABLE
+  RESERVED
+  OCCUPIED
+  DIRTY
+  OUT_OF_ORDER
+  OUT_OF_SERVICE
+}
+
+// TZ 1-band: "mehmon ma'lumotlari"
+model Guest {
+  id          String   @id @default(cuid())
+  fullName    String
+  // Telefon MAJBURIY (2026-09-17 qarori, SAVOLLAR.md S7).
+  // Schema'da `String?` qolgani — Beds24'dan telefonsiz bron
+  // kelishi mumkin va uni rad etib bo'lmaydi. PMS tomonidan
+  // kiritilganda validatsiya talab qiladi.
+  phone       String?
+  email       String?
+  country     String?   // Beds24 yuborsa saqlanadi
+  address     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  reservations Reservation[]
+
+  @@index([phone])
+  @@index([email])
+}
+
+model Reservation {
+  id                    String   @id @default(cuid())
+  roomId                String
+  room                  Room     @relation(fields: [roomId], references: [id])
+  guestId               String
+  guest                 Guest    @relation(fields: [guestId], references: [id])
+
+  // TZ 1-band maydonlari
+  checkIn               DateTime @db.Date
+  checkOut              DateTime @db.Date
+  adults                Int      @default(1)
+  children              Int      @default(0)
+  pricePerNight         Decimal  @db.Decimal(12, 2)
+  currency              String   @default("UZS")
+  source                ReservationSource
+  notes                 String?
+  withMeal              Boolean  @default(false)   // Shaxmatkada mavjud maydon
+
+  // Narx tarifdan past bo'lsa sabab yoziladi (SAVOLLAR.md S4).
+  // Hisobotda "nega arzon sotilgan" ko'rinib tursin.
+  priceReason           String?
+
+  // Bekor qilish jarimasi (SAVOLLAR.md S11). Kech bekor qilinsa
+  // 1 kecha narxi olinadi — bu DAROMAD, shuning uchun alohida
+  // yoziladi va hisobotga tushadi.
+  cancellationFee       Decimal? @db.Decimal(12, 2)
+
+  // Nonushta: kishi boshiga narx (SAVOLLAR.md S10).
+  // Bron yaratilganda o'sha paytdagi narx KO'CHIRILADI — keyin
+  // narx o'zgarsa eski bronlar summasi o'zgarmasin.
+  mealPricePerPerson    Decimal? @db.Decimal(12, 2)
+
+  // TZ 9-band: duplicate himoyasi
+  channelId             String?          // null = direct/ichki bron
+  channel               Channel? @relation(fields: [channelId], references: [id])
+  externalReservationId String?          // Beds24 bookingId
+
+  // TZ 8-band
+  status                ReservationStatus @default(CONFIRMED)
+
+  // TZ 1-band: "check-in", "check-out" — vaqt sifatida ham saqlanadi
+  checkedInAt           DateTime?
+  checkedOutAt          DateTime?
+  cancelledAt           DateTime?
+
+  // Sync holati (TZ 17-band: xato bo'lsa ham PMS ishlayveradi)
+  /**
+   * Mehmonga ko'rsatiladigan bron kodi — "IMR-8F3K2" (13-fayl §2).
+   *
+   * Faqat Website'dan kelgan bronlarda bo'ladi: mijoz bronini shu
+   * kod bilan tekshiradi. Ichki `id` (cuid) berilmaydi — u uzun va
+   * ketma-ket emasligi kafolatlanmagan.
+   */
+  code                  String?  @unique
+
+  syncStatus            EntitySyncStatus @default(PENDING)
+  lastSyncedAt          DateTime?
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  charges               Charge[]
+  payments              Payment[]
+
+  // TZ 9-band: "Unique constraint bo'lsin ... duplicate reservation yaratilmasin"
+  @@unique([channelId, externalReservationId])
+  @@index([roomId, checkIn, checkOut])
+  @@index([status])
+  @@index([syncStatus])
+}
+
+// Shaxmatkadagi SOURCES bilan aynan bir xil qiymatlar
+enum ReservationSource {
+  DIRECT
+  WEBSITE
+  BOOKING_COM
+  AIRBNB
+  EXPEDIA
+  PHONE
+  WALK_IN
+  OTHER
+}
+
+// TZ 8-band: oltitasi ham to'liq qo'llab-quvvatlanadi (mijoz qarori Q5)
+enum ReservationStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+  NO_SHOW
+}
+
+enum EntitySyncStatus {
+  PENDING     // navbatga qo'yilgan, hali yuborilmagan
+  SYNCING     // hozir yuborilmoqda — parallel yuborishni to'sadi (12-fayl §3)
+  SYNCED      // Beds24 qabul qildi
+  FAILED      // 5 urinishdan keyin ham bo'lmadi — Admin ko'radi
+  NOT_APPLICABLE  // mapping yo'q yoki kanal o'chirilgan
+}
+
+model Charge {
+  id            String   @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  label         String
+  amount        Decimal  @db.Decimal(12, 2)
+  createdAt     DateTime @default(now())
+
+  @@index([reservationId])
+}
+
+// TZ 14-band
+model Payment {
+  id                String   @id @default(cuid())
+  reservationId     String
+  reservation       Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  amount            Decimal  @db.Decimal(12, 2)   // manfiy = reversal
+  method            String                        // "Naqd" | "Karta" | "Bank o'tkazmasi" | "Onlayn"
+  paymentDate       DateTime @db.Date             // Shaxmatkadagi payment.date
+  note              String?
+  externalPaymentId String?                       // Beds24'dan kelgan bo'lsa
+  channelId         String?                       // qaysi kanal orqali to'langan
+  createdAt         DateTime @default(now())
+
+  // Kim qabul qildi (SAVOLLAR.md S13). Naqd pul yo'qolsa javobgar
+  // ko'rinib tursin. Beds24'dan kelgan to'lovda bo'sh (xodim yo'q).
+  // Xodim hisobi o'chirilsa ham to'lov yozuvi qoladi -> SetNull.
+  userId            String?
+  user              User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([channelId, externalPaymentId])  // bir to'lov ikki marta yozilmasin
+  @@index([reservationId])
+  @@index([userId])
+}
+
+/**
+ * Telegram bot ruxsat darajasi (TOZALIK-BOT.md §7).
+ *
+ * FULL    — Moliya, Xonalar, Bronlar, Dashboard
+ * LIMITED — Xonalar, Bronlar, Dashboard (moliya YO'Q)
+ *
+ * Farosh bu jadvalda BO'LMAYDI — u `Employee.telegramId`
+ * orqali tanaladi va faqat topshiriqlarini ko'radi.
+ */
+enum BotAccessLevel {
+  FULL
+  LIMITED
+}
+
+/**
+ * Botga kirish huquqi (TOZALIK-BOT.md §7).
+ *
+ * NEGA JADVAL, `.env` EMAS: egasi admin panelda ruxsat qo'shishi
+ * va olib tashlashi kerak. `.env` o'zgarishi server qayta ishga
+ * tushirilishini talab qiladi.
+ *
+ * `.env` dagi `TELEGRAM_FOUNDER_IDS` zaxira sifatida qoladi:
+ * baza ishlamay qolsa ham egasi botdan foydalana olsin.
+ */
+model BotAccess {
+  id          String         @id @default(cuid())
+  botType     String         @default("FOUNDER") // "FOUNDER" | "KITCHEN"
+  telegramId  String?
+  username    String?        // "@" siz, kichik harflarda: "odcoder23"
+  label       String         // "Bosh oshpaz Rustam", "Menejer Jamshid"
+  level       BotAccessLevel @default(FULL)
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  createdById String?
+
+  @@index([isActive])
+  @@index([botType])
+  @@index([telegramId])
+  @@index([username])
+}
+
+/**
+ * Tozalash topshirig'i holati (TOZALIK-BOT.md).
+ *
+ * Farosh tugma bosgani sari o'zgaradi. Telegram xabari ham
+ * shu holatga qarab tahrirlanadi.
+ */
+enum CleaningStatus {
+  NEW          // faroshga yuborildi, hali qabul qilmadi
+  IN_PROGRESS  // farosh qabul qildi, tozalamoqda
+  /**
+   * Farosh "Tozaladim" bosdi, admin hali tasdiqlamadi.
+   *
+   * 2026-09-17 da qo'shildi: egasi tozalash sifatini
+   * tekshirishni xohladi. Xona bu holatda HALI SOTILMAYDI —
+   * faqat tasdiqlangandan keyin ochiladi.
+   */
+  PENDING      // tasdiqlash kutilmoqda
+  DONE         // admin tasdiqladi, xona sotishga tayyor
+  CANCELLED    // admin bekor qildi yoki boshqaga berdi
+}
+
+/**
+ * Tozalash topshirig'i (TOZALIK-BOT.md).
+ *
+ * NEGA JADVAL KERAK, faqat Telegram xabari emas:
+ *   - Xabar o'chirilsa topshiriq yo'qolardi
+ *   - Kim necha xona tozalagani hisoblanmasdi
+ *   - Bot qayta ishga tushsa holatni bilmasdi
+ *
+ * IKKI MANBA, BIR XIL MANTIQ (2026-09-17 qarori):
+ *   `isAuto = true`  — mehmon chiqdi, avtomatik
+ *   `isAuto = false` — admin panelda qo'lda yuborildi
+ *
+ * Ikkalasi ham guruhga bir xil ko'rinishda boradi va bir xil
+ * tugmalar bilan ishlaydi.
+ */
+model CleaningTask {
+  id          String         @id @default(cuid())
+  roomId      String
+  room        Room           @relation(fields: [roomId], references: [id])
+  status      CleaningStatus @default(NEW)
+
+  /** "Mehmon chiqdi" (avtomatik) yoki admin yozgan sabab */
+  reason      String
+  isAuto      Boolean        @default(false)
+
+  /** Qo'lda yuborilgan bo'lsa — kim yubordi */
+  createdById String?
+  createdBy   User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  /**
+   * Kim bajardi — xodim yozuvi (ixtiyoriy).
+   *
+   * Guruh mantig'ida (2026-09-17) topshiriq oldindan hech kimga
+   * biriktirilmaydi, shuning uchun bu maydon odatda bo'sh.
+   * Telegram ID `Employee` bilan bog'langan bo'lsa to'ldiriladi
+   * va hisobot ikkalasi bilan ham ishlaydi.
+   */
+  employeeId  String?
+  employee    Employee?      @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  /**
+   * Guruhda tugmani kim bosgani (2026-09-17, BOTLAR-REJA.md).
+   *
+   * NEGA ISM YETARLI: guruhda faqat farroshlar bor va kim
+   * olgani hammaga ko'rinadi — bu o'z-o'zini nazorat qiladi.
+   * `Employee` yozuvi shart emas, ro'yxatga yangi farosh
+   * qo'shish uchun hech narsa sozlash kerak emas.
+   *
+   * `claimedByName` — Telegram'dagi ismi ("Dilnoza"), xodim
+   * ismi emas. Hisobotda shu ko'rsatiladi.
+   */
+  claimedByTelegramId String?
+  claimedByName       String?
+
+  /**
+   * Telegram xabarini TAHRIRLASH uchun kerak.
+   *
+   * Har bosishda yangi xabar emas, o'shasi o'zgaradi — guruh
+   * to'lib ketmaydi.
+   */
+  chatId      String?
+  messageId   Int?
+
+  createdAt   DateTime       @default(now())
+  acceptedAt  DateTime?
+  /** Farosh "Tozaladim" bosgan vaqt */
+  finishedAt  DateTime?
+  /** Tozalangan xona rasmi (farrosh Telegram orqali yuboradi) */
+  photoUrl    String?
+  /** Admin tasdiqlagan vaqt */
+  doneAt      DateTime?
+  /** Kim tasdiqladi */
+  approvedById String?
+
+  @@index([status, createdAt])
+  @@index([roomId])
+  @@index([employeeId])
+}
+
+/**
+ * Xarajat turlari (SAVOLLAR.md S14).
+ *
+ * NEGA ENUM: erkin matn bo'lsa bir xil xarajat turli nomlar bilan
+ * yozilib, hisobotda guruhlanmay qolardi ("kommunal", "Kommunal",
+ * "svet puli").
+ */
+enum ExpenseCategory {
+  UTILITIES      // suv, elektr, gaz
+  FOOD           // oziq-ovqat, oshxona
+  MAINTENANCE    // ta'mir, jihoz
+  TAX            // soliq
+  MARKETING      // reklama
+  COMMISSION     // OTA komissiyasi (avtomatik hisoblanadi)
+  SALARY         // maosh (Employee'dan avtomatik, qo'lda ham mumkin)
+  OTHER          // boshqa
+}
+
+/**
+ * Xarajat (SAVOLLAR.md S14).
+ *
+ * NEGA KERAK: ilgari hisobotda FAQAT maosh xarajat sifatida
+ * hisoblanardi. Kommunal, soliq va ayniqsa OTA komissiyasi
+ * (Booking.com 15-18%) hisobga olinmagani uchun foyda
+ * haqiqatdan katta ko'rinardi.
+ *
+ * `isAuto` — tizim o'zi hisoblagan (komissiya) yoki qo'lda
+ * kiritilgan. Avtomatik yozuvlar qayta hisoblanganda
+ * o'chiriladi, qo'lda kiritilganlarga tegilmaydi.
+ */
+model Expense {
+  id          String          @id @default(cuid())
+  date        DateTime        @db.Date
+  category    ExpenseCategory
+  amount      Decimal         @db.Decimal(12, 2)
+  note        String?
+
+  // Kim kiritgani — naqd xarajat uchun javobgarlik
+  userId      String?
+  user        User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Avtomatik hisoblangan (OTA komissiyasi) — qo'lda emas
+  isAuto      Boolean         @default(false)
+  // Komissiya qaysi bronga tegishli (auto yozuvlar uchun)
+  reservationId String?
+
+  createdAt   DateTime        @default(now())
+
+  @@index([date, category])
+  @@index([reservationId])
+  @@index([userId])
+}
+
+// TZ 7-band
+model RatePlan {
+  id          String   @id @default(cuid())
+  roomTypeId  String
+  roomType    RoomType @relation(fields: [roomTypeId], references: [id])
+  date        DateTime @db.Date
+  price       Decimal  @db.Decimal(12, 2)
+  minStay     Int      @default(1)
+  source      String   @default("pms")   // "pms" | "beds24" — oxirgi yangilanish qayerdan kelgan
+  syncedAt    DateTime?                   // Beds24'ga yuborilgan vaqt (null = kutmoqda)
+  syncError   String?                     // oxirgi sync xatosi (07 §8 — panel belgisi)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([roomTypeId, date])
+  @@index([date])
+  @@index([syncedAt])
+}
+
+// ===================== AVAILABILITY (TZ 6, 13-band) =====================
+
+// TZ 13-band aynan "Availability" jadvalini talab qiladi.
+// Bu — room type darajasidagi, Beds24'ga YUBORILADIGAN holat (kesh/jurnal).
+// Qiymat RoomDayStatus'dan hisoblab chiqariladi, qo'lda yozilmaydi.
+model Availability {
+  id            String   @id @default(cuid())
+  roomTypeId    String
+  date          DateTime @db.Date
+  totalRooms    Int      // shu turdagi faol xonalar soni
+  bookedRooms   Int      // band qilinganlari
+  blockedRooms  Int      // OUT_OF_ORDER / OUT_OF_SERVICE
+  availableCount Int     // = totalRooms - bookedRooms - blockedRooms
+  syncedCount   Int?     // Beds24'ga oxirgi marta yuborilgan qiymat
+  syncedAt      DateTime?
+  updatedAt     DateTime @updatedAt
+
+  @@unique([roomTypeId, date])
+  @@index([date])
+  @@index([syncedAt])
+}
+
+// Xona darajasidagi kunlik holat — PMS ichki haqiqat manbai.
+// TZ 5-band "Deluxe → Room 202" talabi aynan shu darajada bajariladi.
+model RoomDayStatus {
+  id            String   @id @default(cuid())
+  roomId        String
+  room          Room     @relation(fields: [roomId], references: [id])
+  date          DateTime @db.Date
+  isBlocked     Boolean  @default(false)   // ta'mir/xizmatdan chiqarilgan
+  blockReason   String?
+  updatedAt     DateTime @updatedAt
+
+  @@unique([roomId, date])
+  @@index([date])
+}

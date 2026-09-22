@@ -1,0 +1,79 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: imron-postgres
+    environment:
+      POSTGRES_USER: imron
+      POSTGRES_PASSWORD: imron
+      POSTGRES_DB: imron_pms
+    # Tashqi port 5433: bu kompyuterda mahalliy PostgreSQL 16 xizmati
+    # allaqachon 5432 ni egallagan. Konteyner ichida port o'zgarmaydi,
+    # shuning uchun `api` xizmati uchun hech narsa o'zgarmaydi.
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U imron -d imron_pms"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: imron-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Backend API (11-BOSQICHLAR-ROADMAP.md FAZA 0: api + postgres + redis)
+  #
+  # Ishga tushirishdan oldin migratsiya bajariladi — DB sxemasi
+  # kod bilan bir xil bo'lishi kafolatlanadi.
+  api:
+    build: ./backend
+    container_name: imron-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://imron:imron@postgres:5432/imron_pms?schema=public
+      REDIS_URL: redis://redis:6379
+      # Maxfiy qiymatlar .env dan keladi — repoda saqlanmaydi
+      # (TZ 18-band, 10-fayl §1)
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY kerak}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET kerak}
+      WEBHOOK_URL_TOKEN: ${WEBHOOK_URL_TOKEN:-}
+      WEBHOOK_AUTH_MODE: ${WEBHOOK_AUTH_MODE:-ip_token}
+      BEDS24_BASE_URL: ${BEDS24_BASE_URL:-https://api.beds24.com/v2}
+      # Production'da MAJBURIY yoqiladi
+      AUTH_REQUIRED: ${AUTH_REQUIRED:-true}
+      RATE_LIMIT_DISABLED: ${RATE_LIMIT_DISABLED:-false}
+      SOURCE_OF_TRUTH_RATES: ${SOURCE_OF_TRUTH_RATES:-pms}
+      SOURCE_OF_TRUTH_AVAILABILITY: ${SOURCE_OF_TRUTH_AVAILABILITY:-pms}
+      POLL_INTERVAL_MINUTES: ${POLL_INTERVAL_MINUTES:-15}
+      PENDING_PAYMENT_TIMEOUT_HOURS: ${PENDING_PAYMENT_TIMEOUT_HOURS:-24}
+    ports:
+      - "3000:3000"
+    command: sh -c "npx prisma migrate deploy && node dist/server.js"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+volumes:
+  pgdata:
+  redisdata:

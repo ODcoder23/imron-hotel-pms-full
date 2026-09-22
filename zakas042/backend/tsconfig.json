@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    // Testlar ishlab chiqarish tasviriga kirmaydi: ular
+    // `vitest` orqali to'g'ridan-to'g'ri TypeScript'dan ishlaydi,
+    // kompilyatsiya qilinishi shart emas. Aks holda `dist` ichida
+    // test kodi va mock ma'lumotlar qolib ketardi.
+    "src/**/*.test.ts",
+    "vitest.setup.ts"
+  ]
+}

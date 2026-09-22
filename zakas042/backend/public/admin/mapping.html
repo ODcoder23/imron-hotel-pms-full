@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xona mapping — Imron PMS</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  td:last-child, th:last-child { text-align: right; }
+  select { min-width: 190px; }
+  button.danger { color: var(--err); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Xona mapping</h1>
+  <div class="sub">
+    PMS xona turlarini Beds24'dagi turlarga bog'lash.
+    Bog'lanmagan tur OTA'da ko'rinmaydi (TZ 5-band).
+  </div>
+
+  <nav>
+    <a href="/admin/mapping.html" class="on">Mapping</a>
+    <a href="/admin/connection.html">Ulanish</a>
+    <a href="/admin/sync-log.html">Sync loglari</a>
+  </nav>
+
+  <div id="msg" class="msg"></div>
+
+  <div class="card">
+    <div class="row">
+      <h2 style="margin:0">Holat</h2>
+      <button onclick="load()">Yangilash</button>
+    </div>
+    <div id="status" class="stats" style="margin-top:12px">
+      <div class="empty">Yuklanmoqda...</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Bog'lanishlar</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>PMS xona turi</th>
+          <th>Xonalar</th>
+          <th>Beds24 room type</th>
+          <th>Ovqat</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="5" class="empty">Yuklanmoqda...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" id="unusedCard" style="display:none">
+    <h2>Beds24'da bog'lanmagan turlar</h2>
+    <div id="unused" class="empty"></div>
+  </div>
+</div>
+
+<script>
+const API = "";   // bir xil origin
+
+let external = [];   // Beds24 room type'lari
+let health = null;
+
+function msg(text, isError) {
+  const el = document.getElementById("msg");
+  el.textContent = text;
+  el.className = "msg show " + (isError ? "err" : "ok");
+  if (!isError) setTimeout(() => { el.className = "msg"; }, 3000);
+}
+
+async function api(path, options) {
+  const res = await fetch(API + path, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options?.headers || {}) },
+  });
+  const body = res.status === 204 ? null : await res.json();
+  if (!res.ok) throw new Error(body?.error || ("HTTP " + res.status));
+  return body;
+}
+
+async function load() {
+  try {
+    const [h, ext] = await Promise.all([
+      api("/api/admin/mapping/health"),
+      api("/api/admin/mapping/external"),
+    ]);
+    health = h;
+    external = (ext.properties || []).flatMap(p => p.roomTypes);
+    renderStatus(h, ext);
+    renderRows(h);
+    renderUnused(h);
+  } catch (e) {
+    msg("Yuklab bo'lmadi: " + e.message, true);
+  }
+}
+
+function renderStatus(h, ext) {
+  const badge = h.isComplete
+    ? '<span class="badge b-ok">To\'liq</span>'
+    : '<span class="badge b-warn">To\'liq emas</span>';
+
+  const conn = h.channelConnected
+    ? (ext.connected && external.length
+        ? '<span class="badge b-ok">Ulangan</span>'
+        : '<span class="badge b-warn">Ulangan, API javob bermadi</span>')
+    : '<span class="badge b-mute">Ulanmagan</span>';
+
+  document.getElementById("status").innerHTML = `
+    <div class="stat"><div class="n">${badge}</div><div class="l">Mapping</div></div>
+    <div class="stat"><div class="n">${conn}</div><div class="l">Beds24</div></div>
+    <div class="stat"><div class="n">${h.unmappedRoomCount}</div><div class="l">Bog'lanmagan xona</div></div>
+    <div class="stat"><div class="n">${external.length}</div><div class="l">Beds24 turlari</div></div>
+  `;
+}
+
+function renderRows(h) {
+  const tbody = document.getElementById("rows");
+
+  if (!h.roomTypes.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">Xona turi yo\'q</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = h.roomTypes.map(rt => {
+    const opts = [
+      `<option value="">— tanlanmagan —</option>`,
+      ...external.map(e => {
+        const sel = e.id === rt.externalRoomTypeId ? " selected" : "";
+        return `<option value="${e.id}"${sel}>${e.name} (qty ${e.qty})</option>`;
+      }),
+    ].join("");
+
+    const disabled = external.length === 0 ? " disabled" : "";
+    const warn = rt.warning ? `<div class="note">${rt.warning}</div>` : "";
+    const status = rt.mapped
+      ? '<span class="badge b-ok">✓</span>'
+      : '<span class="badge b-err">yo\'q</span>';
+
+    /* Ovqat belgisi (BOTLAR-REJA.md).
+
+       Beds24 ovqat haqida standart maydon bermaydi — ular
+       "nonushta bilan" va "nonushtasiz" alohida tariflar
+       yaratadi. Qaysi biri ovqatli ekanini biz belgilaymiz. */
+    const meal = rt.mapped
+      ? `<label style="cursor:pointer;display:flex;align-items:center;gap:6px;">
+           <input type="checkbox" onchange="saveMeal('${rt.mappingId}', this.checked)"
+                  ${rt.includesMeal ? 'checked' : ''}>
+           <span>${rt.includesMeal ? 'bilan' : 'siz'}</span>
+         </label>`
+      : '<span class="note">—</span>';
+
+    return `
+      <tr>
+        <td><strong>${rt.label}</strong> <code>${rt.id}</code>${warn}</td>
+        <td>${rt.rooms}</td>
+        <td>
+          <select id="sel-${rt.id}" onchange="save('${rt.id}')"${disabled}>${opts}</select>
+        </td>
+        <td>${meal}</td>
+        <td>${status}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function renderUnused(h) {
+  const card = document.getElementById("unusedCard");
+  const box = document.getElementById("unused");
+
+  if (!h.unusedExternal || !h.unusedExternal.length) {
+    card.style.display = "none";
+    return;
+  }
+
+  card.style.display = "block";
+  box.innerHTML = h.unusedExternal
+    .map(e => `<code>${e.id}</code> ${e.name} (qty ${e.qty})`)
+    .join("<br>");
+}
+
+/**
+ * Ovqat belgisini saqlaydi (BOTLAR-REJA.md).
+ *
+ * Oshxona boti shu belgiga qarab porsiya sanaydi: Beds24'dan
+ * kelgan bron ovqatli bo'lsa hisobga olinadi.
+ */
+async function saveMeal(mappingId, includesMeal) {
+  try {
+    const res = await fetch(`/api/admin/mappings/${mappingId}/meal`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ includesMeal }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || "Saqlanmadi");
+      load();
+      return;
+    }
+
+    load();
+  } catch (e) {
+    alert("Serverga ulanib bo'lmadi");
+    load();
+  }
+}
+
+async function save(roomTypeId) {
+  const sel = document.getElementById("sel-" + roomTypeId);
+  const externalRoomTypeId = sel.value;
+
+  try {
+    if (!externalRoomTypeId) {
+      // Bog'lanishni olib tashlash
+      const list = await api("/api/admin/mapping");
+      const found = list.find(m => m.roomTypeId === roomTypeId);
+      if (found) {
+        try {
+          await api("/api/admin/mapping/" + found.id, { method: "DELETE" });
+          msg("Bog'lanish olib tashlandi");
+        } catch (e) {
+          if (e.message.includes("faol bron")) {
+            if (confirm(e.message + "\n\nBaribir o'chirilsinmi?")) {
+              await api("/api/admin/mapping/" + found.id + "?force=true", { method: "DELETE" });
+              msg("Bog'lanish majburan olib tashlandi");
+            } else {
+              await load();
+              return;
+            }
+          } else throw e;
+        }
+      }
+    } else {
+      await api("/api/admin/mapping", {
+        method: "PUT",
+        body: JSON.stringify({ roomTypeId, externalRoomTypeId }),
+      });
+      msg("Saqlandi");
+    }
+    await load();
+  } catch (e) {
+    msg(e.message, true);
+    await load();
+  }
+}
+
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sync loglari — Imron PMS</title>
+<link rel="stylesheet" href="_shared.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>Sync loglari</h1>
+  <div class="sub">
+    Har sync harakati qayd etiladi (TZ 16-band).
+    Token va parol hech qachon log qilinmaydi.
+  </div>
+
+  <nav>
+    <a href="/admin/mapping.html">Mapping</a>
+    <a href="/admin/connection.html">Ulanish</a>
+    <a href="/admin/sync-log.html" class="on">Sync loglari</a>
+  </nav>
+
+  <div class="card">
+    <div class="row">
+      <h2 style="margin:0">Sync tarixi</h2>
+      <div>
+        <select id="filter" onchange="loadLogs()">
+          <option value="">Hammasi</option>
+          <option value="failed">Faqat xatolar</option>
+          <option value="success">Muvaffaqiyatli</option>
+          <option value="retrying">Qayta urinilmoqda</option>
+          <option value="skipped">O'tkazib yuborilgan</option>
+        </select>
+        <button onclick="loadLogs()">Yangilash</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Vaqt</th><th>Amal</th><th>Yo'nalish</th>
+        <th>Holat</th><th>Urinish</th><th>Xato</th>
+      </tr></thead>
+      <tbody id="logs"><tr><td colspan="6" class="empty">Yuklanmoqda...</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <h2 style="margin:0">Kelgan webhook'lar</h2>
+      <button onclick="loadWebhooks()">Yangilash</button>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Vaqt</th><th>Event</th><th>Beds24 ID</th><th>Holat</th><th>Xato</th><th></th>
+      </tr></thead>
+      <tbody id="hooks"><tr><td colspan="6" class="empty">Yuklanmoqda...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+var BADGE = {
+  success: "b-ok", synced: "b-ok", processed: "b-ok",
+  failed: "b-err", needs_manual_action: "b-err",
+  retrying: "b-warn", pending: "b-warn", queued: "b-warn", received: "b-warn",
+  skipped: "b-mute", ignored_duplicate: "b-mute"
+};
+
+function badge(s) {
+  return '<span class="badge ' + (BADGE[s] || "b-mute") + '">' + s + '</span>';
+}
+
+function time(iso) {
+  return new Date(iso).toLocaleString("uz", { dateStyle: "short", timeStyle: "medium" });
+}
+
+async function loadLogs() {
+  var f = document.getElementById("filter").value;
+  var tb = document.getElementById("logs");
+  try {
+    var r = await fetch("/api/admin/sync-log?limit=100" + (f ? "&status=" + f : ""));
+    var logs = await r.json();
+
+    if (!logs.length) {
+      tb.innerHTML = '<tr><td colspan="6" class="empty">Hali sync bo\'lmagan</td></tr>';
+      return;
+    }
+
+    tb.innerHTML = logs.map(function (l) {
+      var dir = l.direction === "pms_to_channel" ? "PMS → Beds24" : "Beds24 → PMS";
+      return "<tr>" +
+        '<td class="mono">' + time(l.createdAt) + "</td>" +
+        "<td><code>" + l.action + "</code></td>" +
+        '<td class="mono">' + dir + "</td>" +
+        "<td>" + badge(l.status) + "</td>" +
+        "<td>" + l.attempt + "</td>" +
+        '<td style="color:var(--err);font-size:12px">' + (l.errorMessage || "") + "</td>" +
+        "</tr>";
+    }).join("");
+  } catch (e) {
+    tb.innerHTML = '<tr><td colspan="6" class="empty">Xato: ' + e.message + "</td></tr>";
+  }
+}
+
+async function loadWebhooks() {
+  var tb = document.getElementById("hooks");
+  try {
+    var r = await fetch("/api/admin/webhook-events?limit=100");
+    var events = await r.json();
+
+    if (!events.length) {
+      tb.innerHTML = '<tr><td colspan="6" class="empty">Hali webhook kelmagan</td></tr>';
+      return;
+    }
+
+    tb.innerHTML = events.map(function (e) {
+      // Faqat xato holatdagilarni qayta ishlash mumkin (04-fayl §7)
+      var canRetry = e.status === "failed" || e.status === "needs_manual_action";
+      var btn = canRetry
+        ? '<button onclick="reprocess(&quot;' + e.id + '&quot;)">Qayta ishlash</button>'
+        : "";
+      return "<tr>" +
+        '<td class="mono">' + time(e.createdAt) + "</td>" +
+        "<td><code>" + e.eventType + "</code></td>" +
+        '<td class="mono">' + (e.externalId || "—") + "</td>" +
+        "<td>" + badge(e.status) + "</td>" +
+        '<td style="color:var(--err);font-size:12px">' + (e.errorMessage || "") + "</td>" +
+        '<td style="text-align:right">' + btn + "</td>" +
+        "</tr>";
+    }).join("");
+  } catch (e) {
+    tb.innerHTML = '<tr><td colspan="6" class="empty">Xato: ' + e.message + "</td></tr>";
+  }
+}
+
+async function reprocess(id) {
+  try {
+    var r = await fetch("/api/admin/webhook-events/" + id + "/reprocess", { method: "POST" });
+    var b = await r.json();
+    if (!r.ok) throw new Error(b.error || "Xato");
+    await loadWebhooks();
+  } catch (e) {
+    alert("Qayta ishlanmadi: " + e.message);
+  }
+}
+
+loadLogs();
+loadWebhooks();
+</script>
+</body>
+</html>

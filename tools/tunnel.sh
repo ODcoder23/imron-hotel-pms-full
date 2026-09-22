@@ -17,7 +17,7 @@
 #  kirib bo'lmaydi. Shu tunnel yagona yo'l.
 # ============================================================
 
-SERVER="root@212.47.71.36"
+source "$(dirname "${BASH_SOURCE[0]}")/_server.sh"
 KEY="$HOME/.ssh/hotel_vps"
 
 echo "Tunnel ochilmoqda: $SERVER"

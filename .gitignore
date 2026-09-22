@@ -36,3 +36,6 @@ logs/
 *.log
 .gstack/
 .git_backup/
+
+# Server manzili (tools/_server.sh o'qiydi)
+tools/.server

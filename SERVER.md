@@ -1,26 +1,29 @@
 # Server (Contabo VPS)
 
-Butun infratuzilma serverda: `212.47.71.36`. Kompyuterda faqat kod.
+Butun infratuzilma serverda: `<SERVER_IP>`. Kompyuterda faqat kod.
+
+> Haqiqiy IP va domen repoda saqlanmaydi. Skriptlar uchun `tools/.server`
+> fayliga `root@<SERVER_IP>` yozing (git'ga kirmaydi).
 
 Loyiha logikasi: [PROJECT_LOGIC.md](PROJECT_LOGIC.md) ·
 Qolgan ishlar: [TODO.md](TODO.md)
 
 ---
 
-## Production Manzillari (abdurahmon.dev)
+## Production Manzillari (<DOMAIN>)
 
-Loyiha to'liq `abdurahmon.dev` domeniga ulangan (SSL / HTTPS + WSS):
+Loyiha to'liq `<DOMAIN>` domeniga ulangan (SSL / HTTPS + WSS):
 
 | Manzil | Nima | Tavsif |
 |---|---|---|
-| `https://abdurahmon.dev/` | Sayt | Mehmonlar uchun xonalar va bron qilish |
-| `https://abdurahmon.dev/shaxmatka` | Bandlik jadvali | Shaxmatka interfeysi |
-| `https://abdurahmon.dev/admin-panel` | Xodimlar paneli | PMS boshqaruv paneli |
-| `https://abdurahmon.dev/admin/mapping.html` | Xona mapping | Beds24 xona va tarif moslashuvi |
-| `https://abdurahmon.dev/admin/connection.html` | Ulanish holati | Beds24 ulanishi va hisob balansi |
-| `https://abdurahmon.dev/admin/sync-log.html` | Sinxronizatsiya jurnali | Hodisalar va xatoliklar tarixi |
-| `wss://abdurahmon.dev/ws` | Real-time WebSocket | Shaxmatka va admin panel jonli yangilanishi |
-| `https://abdurahmon.dev/health` | Health Check | Tizim holati (DB, Redis, Realtime, Security) |
+| `https://<DOMAIN>/` | Sayt | Mehmonlar uchun xonalar va bron qilish |
+| `https://<DOMAIN>/shaxmatka` | Bandlik jadvali | Shaxmatka interfeysi |
+| `https://<DOMAIN>/admin-panel` | Xodimlar paneli | PMS boshqaruv paneli |
+| `https://<DOMAIN>/admin/mapping.html` | Xona mapping | Beds24 xona va tarif moslashuvi |
+| `https://<DOMAIN>/admin/connection.html` | Ulanish holati | Beds24 ulanishi va hisob balansi |
+| `https://<DOMAIN>/admin/sync-log.html` | Sinxronizatsiya jurnali | Hodisalar va xatoliklar tarixi |
+| `wss://<DOMAIN>/ws` | Real-time WebSocket | Shaxmatka va admin panel jonli yangilanishi |
+| `https://<DOMAIN>/health` | Health Check | Tizim holati (DB, Redis, Realtime, Security) |
 
 Kirish: `founder@imron.local` / `admin12345` (to'liq huquq).
 Boshqa rollar: `admin@`, `manager@`, `staff@` — bir xil parol.
@@ -55,7 +58,7 @@ nusxasi bor.
 qilish shart:
 
 ```bash
-ssh -i ~/.ssh/hotel_vps root@212.47.71.36 \
+ssh -i ~/.ssh/hotel_vps root@<SERVER_IP> \
   'cd /opt/hotel-pms/backend && npx tsc && systemctl restart hotel-backend'
 ```
 
@@ -64,7 +67,7 @@ ssh -i ~/.ssh/hotel_vps root@212.47.71.36 \
 ## Nima qayerda
 
 ```
-KOMPYUTER                          SERVER (212.47.71.36)
+KOMPYUTER                          SERVER (<SERVER_IP>)
 ─────────                          ────────────────────
 zakas042/backend/    ──sync.sh──>  /opt/hotel-pms/backend/
   src/ prisma/ public/               src/ prisma/ public/ dist/
@@ -142,13 +145,13 @@ Zaxiralar `/opt/hotel-pms/backups/` da. Tiklash tekshirilgan.
 ```bash
 bash tools/status.sh          # umumiy holat
 
-ssh -i ~/.ssh/hotel_vps root@212.47.71.36 \
+ssh -i ~/.ssh/hotel_vps root@<SERVER_IP> \
   'journalctl -u hotel-backend -n 40 --no-pager'
 
-ssh -i ~/.ssh/hotel_vps root@212.47.71.36 \
+ssh -i ~/.ssh/hotel_vps root@<SERVER_IP> \
   'systemctl restart hotel-backend'
 
-ssh -i ~/.ssh/hotel_vps root@212.47.71.36 \
+ssh -i ~/.ssh/hotel_vps root@<SERVER_IP> \
   'cd /opt/hotel-pms && docker compose restart'
 ```
 

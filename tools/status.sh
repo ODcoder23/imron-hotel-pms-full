@@ -2,7 +2,7 @@
 # ============================================================
 #  Server holatini tekshirish
 # ============================================================
-SERVER="root@212.47.71.36"
+source "$(dirname "${BASH_SOURCE[0]}")/_server.sh"
 KEY="$HOME/.ssh/hotel_vps"
 
 ssh -i "$KEY" "$SERVER" 'bash -s' << 'REMOTE'

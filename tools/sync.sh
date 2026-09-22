@@ -12,7 +12,7 @@
 # ============================================================
 set -e
 
-SERVER="root@212.47.71.36"
+source "$(dirname "${BASH_SOURCE[0]}")/_server.sh"
 KEY="$HOME/.ssh/hotel_vps"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL="$(cd "$SCRIPT_DIR/../zakas042" && pwd)"
